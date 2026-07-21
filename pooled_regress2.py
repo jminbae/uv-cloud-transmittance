@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 rng = np.random.RandomState(0)
 sys.stdout.reconfigure(encoding="utf-8")
 
-d = pd.read_csv("pooled_matched2.csv")
+d = pd.read_csv("pooled_matched3.csv")
 d["dt_min"] = pd.to_numeric(d.get("dt_min"), errors="coerce")
 print(f"풀링 표본 n={len(d)}  관측소 {d.station.nunique()}개  τ 0–{d.tau.max():.0f}")
 if d["dt_min"].notna().any():

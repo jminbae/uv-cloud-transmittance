@@ -9,15 +9,15 @@ from fetch_modis_tau import modis_tau
 API="https://api.woudc.org"
 
 # (표시명, WOUDC platform_name, lat, lon, 지상연도들, UVA380가능)
-STATIONS=[  # (표시명, WOUDC명, lat, lon, 연도, UVA380, stride)
- ("MaunaLoa","Mauna Loa", 19.536,-155.576,[2018],False, 8),
- ("Tateno",  "Tateno",    36.058, 140.126,[2019],False, 8),
- ("Uccle",   "Uccle",     50.80,    4.35, [2022],False,16),
- ("Lauder",  "Lauder",   -45.038, 169.684,[2018],True,  1),
- ("Ushuaia", "Ushuaia",  -54.85,  -68.31, [2004],True,  8),
+STATIONS=[  # (표시명, WOUDC명, lat, lon, 연도들, UVA380, stride)
+ ("MaunaLoa","Mauna Loa", 19.536,-155.576,[2017,2018],False, 8),
+ ("Tateno",  "Tateno",    36.058, 140.126,[2019,2020],False, 8),
+ ("Uccle",   "Uccle",     50.80,    4.35, [2022,2023],False,16),
+ ("Lauder",  "Lauder",   -45.038, 169.684,[2016,2017,2018],True, 1),
+ ("Ushuaia", "Ushuaia",  -54.85,  -68.31, [2003,2004,2006,2007],True, 8),
 ]
-DAYS_PER_STN=22
-POOLED="pooled_matched2.csv"
+DAYS_PER_STN=32
+POOLED="pooled_matched3.csv"
 
 def pull_ozone(station, years):
     s=requests.Session(); s.headers.update({"User-Agent":"uv/1.0"}); rows=[]; off=0
@@ -61,7 +61,7 @@ def transmittance(ground_csv, station, years, uva):
         if m.sum()>=8: cx.append(lo+1); cy.append(np.percentile(e[m],95))
     if len(cx)<3: return None
     env=np.interp(x,np.array(cx),np.array(cy)); clear=e>=0.85*env   # 흐린 관측소(Ushuaia) 대비 완화
-    if clear.sum()<12: return None
+    if clear.sum()<10: return None
     mu=df.mu.values; o3v=df.o3.values
     bands={"T305":"uvb_305","T310":"uvb_310","T324":"uv_324"}
     if uva: bands["T380"]="uva_380"
@@ -92,7 +92,7 @@ first=not os.path.exists(POOLED)
 
 for disp,wname,lat,lon,years,uva,stride in STATIONS:
     print(f"\n===== {disp} ({lat:.1f}) years={years} UVA={uva} stride={stride} =====",flush=True)
-    gcsv=f"ground2_{disp}.csv"   # UTC오프셋 포함 재추출본
+    gcsv=f"ground3_{disp}.csv"   # 다년·UTC오프셋 포함 재추출본
     if not os.path.exists(gcsv):
         try: FG.fetch_ground_uv(wname, years, gcsv, stride=stride, verbose=True)
         except SystemExit as e: print("  지상 추출 실패:",e); continue
