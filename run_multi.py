@@ -16,8 +16,8 @@ STATIONS=[  # (표시명, WOUDC명, lat, lon, 연도, UVA380, stride)
  ("Lauder",  "Lauder",   -45.038, 169.684,[2018],True,  1),
  ("Ushuaia", "Ushuaia",  -54.85,  -68.31, [2004],True,  8),
 ]
-DAYS_PER_STN=20
-POOLED="pooled_matched.csv"
+DAYS_PER_STN=22
+POOLED="pooled_matched2.csv"
 
 def pull_ozone(station, years):
     s=requests.Session(); s.headers.update({"User-Agent":"uv/1.0"}); rows=[]; off=0
@@ -60,8 +60,8 @@ def transmittance(ground_csv, station, years, uva):
         m=(x>=lo)&(x<lo+2)
         if m.sum()>=8: cx.append(lo+1); cy.append(np.percentile(e[m],95))
     if len(cx)<3: return None
-    env=np.interp(x,np.array(cx),np.array(cy)); clear=e>=0.9*env
-    if clear.sum()<30: return None
+    env=np.interp(x,np.array(cx),np.array(cy)); clear=e>=0.85*env   # 흐린 관측소(Ushuaia) 대비 완화
+    if clear.sum()<12: return None
     mu=df.mu.values; o3v=df.o3.values
     bands={"T305":"uvb_305","T310":"uvb_310","T324":"uv_324"}
     if uva: bands["T380"]="uva_380"
@@ -77,18 +77,22 @@ def transmittance(ground_csv, station, years, uva):
         df[tb]=np.clip(y/np.exp(X@b),0,1.4)
     return df
 
+def th_hours(s):
+    try: return int(str(s)[:2]) + int(str(s)[3:5])/60.0
+    except Exception: return np.nan
+
 # --- 재개용: 이미 처리한 (station,date) ---
 done=set()
 if os.path.exists(POOLED):
     try:
         p=pd.read_csv(POOLED); done=set(zip(p.station,p.date.astype(str)))
     except Exception: pass
-cols=["station","lat","date","sza","T305","T310","T324","T380","tau"]
+cols=["station","lat","date","sza","dt_min","T305","T310","T324","T380","tau"]
 first=not os.path.exists(POOLED)
 
 for disp,wname,lat,lon,years,uva,stride in STATIONS:
     print(f"\n===== {disp} ({lat:.1f}) years={years} UVA={uva} stride={stride} =====",flush=True)
-    gcsv=f"ground_{disp}.csv"
+    gcsv=f"ground2_{disp}.csv"   # UTC오프셋 포함 재추출본
     if not os.path.exists(gcsv):
         try: FG.fetch_ground_uv(wname, years, gcsv, stride=stride, verbose=True)
         except SystemExit as e: print("  지상 추출 실패:",e); continue
@@ -96,22 +100,33 @@ for disp,wname,lat,lon,years,uva,stride in STATIONS:
     tdf=transmittance(gcsv, wname, years, uva)
     if tdf is None: print("  투과율 계산 실패(맑은스캔 부족 등)"); continue
     tdf["date"]=tdf["date"].astype(str)
-    noon=tdf.loc[tdf.groupby("date")["sza"].idxmin()].sort_values("date").reset_index(drop=True)
-    step=max(1,len(noon)//DAYS_PER_STN)
-    sample=list(noon["date"])[::step][:DAYS_PER_STN]
-    print(f"  투과율 {len(tdf)}스캔 / {len(noon)}일 → 표본 {len(sample)}일",flush=True)
+    tdf["th"]=tdf["time_local"].map(th_hours)
+    tdf["uoff"]=pd.to_numeric(tdf.get("utcoffset"),errors="coerce")
+    tdf=tdf.dropna(subset=["th","uoff"])
+    tdf["scan_utc"]=(tdf["th"]-tdf["uoff"])%24.0    # 스캔별 UTC(서머타임 자동 반영)
+    days=sorted(tdf["date"].unique())
+    step=max(1,len(days)//DAYS_PER_STN)
+    sample=days[::step][:DAYS_PER_STN]
+    print(f"  투과율 {len(tdf)}스캔 / {len(days)}일 → 표본 {len(sample)}일",flush=True)
     for d in sample:
         if (disp,d) in done: continue
-        row=noon[noon.date==d].iloc[0]
-        try: tau,n=modis_tau(d,lat,lon,verbose=False)
+        try: tau,n,over_h=modis_tau(d,lat,lon,verbose=False)
         except Exception as e: print(f"    {d} MODIS오류 {str(e)[:50]}"); continue
         if not np.isfinite(tau): continue
-        rec={"station":disp,"lat":lat,"date":d,"sza":round(float(row.sza),1),
-             "T305":round(float(row.T305),3) if np.isfinite(row.T305) else "",
-             "T310":round(float(row.T310),3) if np.isfinite(row.T310) else "",
-             "T324":round(float(row.T324),3) if np.isfinite(row.T324) else "",
-             "T380":round(float(row.get("T380",np.nan)),3) if ("T380" in row and np.isfinite(row.T380)) else "",
-             "tau":round(float(tau),2)}
+        day=tdf[tdf["date"]==d].copy()
+        if len(day)==0: continue
+        if np.isfinite(over_h):
+            day["dt"]=np.minimum((day["scan_utc"]-over_h)%24.0,(over_h-day["scan_utc"])%24.0)  # UTC 원형거리(시)
+            best=day.loc[day["dt"].idxmin()]; dt=float(best["dt"])
+        else:
+            best=day.loc[day["sza"].idxmin()]; dt=np.nan
+        if np.isfinite(dt) and dt>0.67:   # 통과시각 ±40분 내 스캔 없음 → 건너뜀
+            continue
+        def R(v): return round(float(v),3) if (v==v) else ""
+        rec={"station":disp,"lat":lat,"date":d,"sza":round(float(best.sza),1),
+             "dt_min":round(dt*60,0) if np.isfinite(dt) else "",
+             "T305":R(best.T305),"T310":R(best.T310),"T324":R(best.T324),
+             "T380":R(best.T380) if "T380" in best else "","tau":round(float(tau),2)}
         pd.DataFrame([rec])[cols].to_csv(POOLED,mode="a",header=first,index=False); first=False
-        print(f"    {disp} {d} τ={tau:5.1f} T305={rec['T305']} T380={rec['T380']}",flush=True)
+        print(f"    {disp} {d} τ={tau:5.1f} Δt={rec['dt_min']}분 T305={rec['T305']} T380={rec['T380']}",flush=True)
 print("\n=== 전체 완료 ===",flush=True)
