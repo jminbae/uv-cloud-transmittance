@@ -7,7 +7,7 @@ import os, sys, time, requests, numpy as np, pandas as pd
 sys.stdout.reconfigure(encoding="utf-8")
 
 API = "https://api.woudc.org"
-TARGETS = (305, 310, 324, 380)
+TARGETS = (305, 310, 324, 380, 440)   # 440nm = 보라·파랑 가시광(풀분광기만; Brewer는 범위밖=무시)
 
 
 def _records(platform_name, years, verbose=True):
@@ -48,7 +48,13 @@ def _parse_file(text):
             except Exception: loc = {}
             i += 3; continue
         if ln == "#TIMESTAMP":
-            v = lines[i + 2].split(","); cur = {"date": v[1], "time": v[2]}; i += 3; continue
+            v = lines[i + 2].split(",")
+            off = 0.0
+            try:
+                so = v[0].strip(); sign = -1 if so.startswith("-") else 1
+                pp = so.lstrip("+-").split(":"); off = sign*(int(pp[0]) + int(pp[1])/60.0)
+            except Exception: off = 0.0
+            cur = {"date": v[1], "time": v[2], "utcoffset": off}; i += 3; continue
         if ln == "#GLOBAL_SUMMARY":
             h = lines[i + 1].split(","); v = lines[i + 2].split(","); d = dict(zip(h, v))
             try: cur["sza"] = float(d.get("ZenAngle"))
@@ -72,10 +78,13 @@ def _parse_file(text):
     return scans
 
 
-def fetch_ground_uv(platform_name, years, out_csv, max_files=None, verbose=True):
+def fetch_ground_uv(platform_name, years, out_csv, max_files=None, stride=1, verbose=True):
     if isinstance(years, int): years = {years}
     years = set(years)
     recs = _records(platform_name, years, verbose)
+    if stride > 1:
+        recs = recs[::stride]      # 연중 고르게 솎아 요청수 절감(일자료 관측소용)
+        if verbose: print(f"  stride={stride} → {len(recs)}개 파일만 사용")
     if max_files: recs = recs[:max_files]
     rows = []
     for k, (url, model, sid) in enumerate(recs):
@@ -93,10 +102,10 @@ def fetch_ground_uv(platform_name, years, out_csv, max_files=None, verbose=True)
         raise SystemExit(f"[{platform_name}] 스캔 0개.")
     df = pd.DataFrame(rows)
     df = df.rename(columns={"e305": "uvb_305", "e310": "uvb_310", "e324": "uv_324", "e380": "uva_380",
-                            "cie": "erythemal", "date": "date", "time": "time_local"})
+                            "e440": "vis_440", "cie": "erythemal", "date": "date", "time": "time_local"})
     df["station"] = platform_name
-    cols = ["station", "stn_id", "lat", "lon", "alt", "date", "time_local", "sza",
-            "uvb_305", "uvb_310", "uv_324", "uva_380", "erythemal", "wlmax", "instrument"]
+    cols = ["station", "stn_id", "lat", "lon", "alt", "date", "time_local", "utcoffset", "sza",
+            "uvb_305", "uvb_310", "uv_324", "uva_380", "vis_440", "erythemal", "wlmax", "instrument"]
     df = df[[c for c in cols if c in df.columns]]
     df.to_csv(out_csv, index=False)
     if verbose:
